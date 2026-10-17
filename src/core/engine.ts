@@ -268,6 +268,10 @@ export class Engine {
   }
 
   private addExisting(b: BuildingInstance): void {
+    // Совместимость со старыми сохранениями (поле buildProgress появилось позже):
+    // если здание сохранено посреди стройки, достраиваем его мгновенно,
+    // иначе оно навсегда останется «вечной стройкой» и ничего не произведёт.
+    if ((b.buildProgress ?? 1) < 1) b.buildProgress = 1;
     this.buildings.push(b);
     const def = BUILDINGS[b.defId];
     if (!def) return;
