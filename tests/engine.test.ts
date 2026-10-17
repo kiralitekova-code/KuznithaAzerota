@@ -28,10 +28,55 @@ function makeLevel(overrides: Partial<LevelDef> = {}): LevelDef {
   };
 }
 
+const finishConstruction = (e: Engine) => {
+  for (const b of e.buildings) if ((b.buildProgress ?? 1) < 1) b.buildProgress = 1;
+};
+
 const run = (e: Engine, seconds: number) => {
   const steps = Math.round(seconds / 0.05);
   for (let i = 0; i < steps; i++) e.tick(0.05);
 };
+
+describe('Engine: стройка и перенос', () => {
+  it('новое здание строится со временем и начинает работать после достройки', () => {
+    const e = new Engine(makeLevel());
+    expect(e.placeBuilding('mine_iron', 1, 1)).toBe(true);
+    const b = e.buildings[0];
+    expect(b.buildProgress).toBe(0);
+    run(e, 2); // стройка ещё идёт (buildTimeFor(mine_iron) = 3 c)
+    expect((b.buildProgress ?? 0) > 0).toBe(true);
+    expect((b.buildProgress ?? 0) < 1).toBe(true);
+    expect(b.outputs.ore_iron ?? 0).toBe(0);
+    run(e, 6); // достраиваем и ждём цикл
+    expect(b.buildProgress).toBe(1);
+    expect(b.outputs.ore_iron).toBe(1);
+  });
+
+  it('перенос здания освобождает старые клетки и занимает новые', () => {
+    const e = new Engine(makeLevel());
+    e.placeBuilding('mine_iron', 1, 1);
+    const b = e.buildings[0];
+    expect(e.moveBlockReason(b.id, 8, 8)).toBeNull();
+    expect(e.moveBuilding(b.id, 8, 8)).toBe(true);
+    expect(b.x).toBe(8);
+    expect(e.buildingAt(1, 1)).toBeNull();
+    expect(e.buildingAt(9, 9)?.id).toBe(b.id);
+    // нельзя поставить другое здание на старые клетки
+    expect(e.placeBuilding('mine_iron', 1, 1)).toBe(true);
+    // и нельзя перенести на занятое место
+    expect(e.moveBlockReason(b.id, 1, 1)).toBe('occupied');
+    expect(e.moveBuilding(b.id, 1, 1)).toBe(false);
+  });
+
+  it('нехватка ресурсов показывает конкретный дефицит', () => {
+    const toastTexts: string[] = [];
+    const off = bus.on('toast', (p) => toastTexts.push((p as { text: string }).text));
+    const e = new Engine(makeLevel({ startingGold: 10 }));
+    expect(e.placeBuilding('smelter_iron', 1, 1)).toBe(false);
+    expect(toastTexts.some((t) => t.includes('золото'))).toBe(true);
+    off();
+  });
+});
 
 describe('Engine: постройка', () => {
   let e: Engine;
@@ -80,6 +125,8 @@ describe('Engine: производство', () => {
     const e = new Engine(makeLevel());
     e.placeBuilding('mine_iron', 1, 1);
     const coalBefore = e.resources.coal;
+    finishConstruction(e);
+
     run(e, 3.0);
     expect(e.buildings[0].outputs.ore_iron).toBe(1);
     expect(e.resources.coal).toBe(coalBefore - 1);
@@ -88,6 +135,8 @@ describe('Engine: производство', () => {
   it('без угля шахта не работает', () => {
     const e = new Engine(makeLevel({ startingResources: { wood: 200 } }));
     e.placeBuilding('mine_iron', 1, 1);
+    finishConstruction(e);
+
     run(e, 6);
     expect(e.buildings[0].outputs.ore_iron ?? 0).toBe(0);
   });
@@ -98,6 +147,8 @@ describe('Engine: производство', () => {
     const b = e.buildings[0];
     b.inputs.ore_iron = 2;
     b.inputs.coal = 2;
+    finishConstruction(e);
+
     run(e, 4.0);
     expect(b.outputs.ingot_iron).toBe(1);
     expect(b.inputs.ore_iron).toBe(1);
@@ -108,6 +159,8 @@ describe('Engine: производство', () => {
     e.placeBuilding('forge_small', 1, 1);
     const b = e.buildings[0];
     b.inputs.ingot_iron = 4;
+    finishConstruction(e);
+
     run(e, 5.0);
     expect(b.outputs.blade_rough).toBe(1);
   });
@@ -115,6 +168,8 @@ describe('Engine: производство', () => {
   it('улучшения ускоряют добычу', () => {
     const e = new Engine(makeLevel(), { mining: 2 });
     e.placeBuilding('mine_iron', 1, 1);
+    finishConstruction(e);
+
     run(e, 2.7);
     expect(e.buildings[0].outputs.ore_iron).toBe(1);
     expect(speedMultiplier({ mining: 2 }, 'mine')).toBeCloseTo(1.3);
@@ -128,6 +183,8 @@ describe('Engine: конвейеры и склад', () => {
     e.placeBelt(3, 1, 'e');
     e.placeBelt(4, 1, 'e');
     e.placeBuilding('warehouse', 5, 1);
+    finishConstruction(e);
+
     run(e, 14);
     expect(e.resources.ore_iron ?? 0).toBeGreaterThanOrEqual(1);
   });
@@ -137,6 +194,8 @@ describe('Engine: конвейеры и склад', () => {
     e.placeBelt(1, 1, 'e');
     const tile = e.beltAt(1, 1)!;
     for (let i = 0; i < 4; i++) tile.items.push({ item: 'coal', progress: 0 });
+    finishConstruction(e);
+
     run(e, 6);
     expect(tile.items.length).toBeLessThanOrEqual(4);
   });
@@ -156,6 +215,8 @@ describe('Engine: задания и прогресс', () => {
     const e = new Engine(makeLevel());
     e.placeBuilding('mine_iron', 1, 1);
     const gold = e.gold;
+    finishConstruction(e);
+
     run(e, 9.0);
     expect(e.quests[0].done).toBe(true);
     expect(e.gold).toBe(gold + 100);
@@ -169,6 +230,8 @@ describe('Engine: задания и прогресс', () => {
     });
     const e = new Engine(makeLevel());
     e.placeBuilding('mine_iron', 1, 1);
+    finishConstruction(e);
+
     run(e, 20);
     off();
     expect(count).toBe(1);
@@ -183,6 +246,8 @@ describe('Engine: задания и прогресс', () => {
   it('нельзя перевыполнить задание', () => {
     const e = new Engine(makeLevel());
     e.placeBuilding('mine_iron', 1, 1);
+    finishConstruction(e);
+
     run(e, 30);
     expect(e.quests[0].progress).toBeLessThanOrEqual(e.quests[0].amount);
   });
@@ -193,6 +258,8 @@ describe('Engine: сохранение', () => {
     const e = new Engine(makeLevel());
     e.placeBuilding('mine_iron', 1, 1);
     e.placeBelt(4, 4, 'n');
+    finishConstruction(e);
+
     run(e, 4);
     const data = e.serialize();
     const restored = Engine.fromSave(data);

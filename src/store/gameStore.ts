@@ -37,6 +37,7 @@ interface GameStore {
   beltDir: Dir;
   demolish: boolean;
   selectedInstance: string | null;
+  movingId: string | null;
 
   speed: number;
   paused: boolean;
@@ -63,6 +64,7 @@ interface GameStore {
   rotateBelt: () => void;
   toggleDemolish: () => void;
   selectInstance: (id: string | null) => void;
+  startMove: (id: string | null) => void;
   buildAt: (x: number, y: number) => void;
 
   setSpeed: (s: number) => void;

@@ -59,7 +59,12 @@ export interface BuildingInstance {
   inputs: Record<ItemId, number>;
   outputs: Record<ItemId, number>;
   working: boolean;
+  /** прогресс стройки 0..1 (< 1 — здание ещё строится и не работает) */
+  buildProgress?: number;
 }
+
+/** Причина, по которой постройку/перенос выполнить нельзя. */
+export type BuildBlock = 'not-available' | 'limit' | 'occupied' | 'no-gold' | 'no-materials' | null;
 
 export interface BeltItem {
   item: ItemId;
@@ -143,6 +148,18 @@ export interface SaveData {
   meta: { lastSavedAt: number; totalPlayTime: number; lastCompletedLevel?: number };
 }
 
+/** Краткая информация о строящемся/построенном здании для панели стройки. */
+export interface BuildInfoEntry {
+  id: string;
+  defId: BuildingId;
+  name: string;
+  x: number;
+  y: number;
+  /** 0..1 — общий прогресс (стройка + готовность) */
+  progress: number;
+  building: boolean;
+}
+
 export interface Snapshot {
   resources: Record<ItemId, number>;
   gold: number;
@@ -155,4 +172,5 @@ export interface Snapshot {
   buildingsCount: number;
   beltsCount: number;
   gridsize: [number, number];
+  buildQueue: BuildInfoEntry[];
 }

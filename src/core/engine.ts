@@ -4,6 +4,7 @@ import { getLevel } from '../data/levels';
 import { buildCostMultiplier, questAmountMultiplier, speedMultiplier } from '../data/upgrades';
 import type {
   BeltTile,
+  BuildBlock,
   BuildingId,
   BuildingInstance,
   Dir,
@@ -19,6 +20,14 @@ export const MAX_BUILDINGS = 200;
 export const TICK = 0.05; // 20 Гц
 const BASE_INPUT_CAP = 10;
 const BASE_OUTPUT_CAP = 10;
+
+/** Сколько секунд строится здание (примерно половина одного производственного цикла). */
+export function buildTimeFor(defId: BuildingId): number {
+  const def = BUILDINGS[defId];
+  if (!def) return 4;
+  const t = def.recipes.length ? Math.min(...def.recipes.map((r) => r.time)) : 8;
+  return Math.max(3, Math.round(t * 0.7));
+}
 
 const key = (x: number, y: number) => `${x},${y}`;
 const DIR_VEC: Record<Dir, [number, number]> = { n: [0, -1], e: [1, 0], s: [0, 1], w: [-1, 0] };
@@ -137,9 +146,84 @@ export class Engine {
     return materials.every((m) => (this.resources[m.item] ?? 0) >= m.qty);
   }
 
+  /** Клетки, которые занял бы def при установке в (x, y), включая саму площадку. */
+  footprint(defId: BuildingId, x: number, y: number, ignoreId?: string): string[] {
+    const cells = BUILDINGS[defId]?.cells ?? 1;
+    const out: string[] = [];
+    for (let dy = 0; dy < cells; dy++)
+      for (let dx = 0; dx < cells; dx++) {
+        const k = key(x + dx, y + dy);
+        const owner = this.occupied.get(k);
+        if (owner && owner !== ignoreId) out.push(k);
+      }
+    return out;
+  }
+
+  /** Точная причина, почему постройку нельзя выполнить (null — всё в порядке). */
+  blockReason(defId: BuildingId, x: number, y: number): BuildBlock {
+    if (!this.level.availableBuildings.includes(defId)) return 'not-available';
+    if (this.buildings.length >= MAX_BUILDINGS) return 'limit';
+    if (!this.cellsFree(defId, x, y)) return 'occupied';
+    const cost = this.costOf(defId);
+    if (this.gold < cost.gold) return 'no-gold';
+    if (!cost.materials.every((m) => (this.resources[m.item] ?? 0) >= m.qty)) return 'no-materials';
+    return null;
+  }
+
+  /** Причина, почему нельзя перенести здание id в (x, y). */
+  moveBlockReason(id: string, x: number, y: number): BuildBlock {
+    const b = this.buildings.find((v) => v.id === id);
+    if (!b) return 'occupied';
+    const def = BUILDINGS[b.defId];
+    if (!def) return 'occupied';
+    if (x === b.x && y === b.y) return null;
+    if (!this.inside(x, y) || !this.inside(x + def.cells - 1, y + def.cells - 1)) return 'occupied';
+    const own = new Set(this.footprint(b.defId, b.x, b.y, b.id));
+    for (let dy = 0; dy < def.cells; dy++)
+      for (let dx = 0; dx < def.cells; dx++) {
+        const cx = x + dx;
+        const cy = y + dy;
+        if (!this.inside(cx, cy)) return 'occupied';
+        const k = key(cx, cy);
+        if (own.has(k)) continue; // свои клетки не мешаем
+        if (this.occupied.has(k)) return 'occupied';
+        if (this.belts.has(k)) return 'occupied';
+      }
+    return null;
+  }
+
+  /** Перенос здания без повторной оплаты. */
+  moveBuilding(id: string, x: number, y: number): boolean {
+    const b = this.buildings.find((v) => v.id === id);
+    if (!b) return false;
+    if (this.moveBlockReason(id, x, y) !== null) return false;
+    if (x === b.x && y === b.y) return true;
+    const def = BUILDINGS[b.defId];
+    for (let dy = 0; dy < def.cells; dy++)
+      for (let dx = 0; dx < def.cells; dx++) this.occupied.delete(key(b.x + dx, b.y + dy));
+    b.x = x;
+    b.y = y;
+    for (let dy = 0; dy < def.cells; dy++)
+      for (let dx = 0; dx < def.cells; dx++) this.occupied.set(key(x + dx, y + dy), b.id);
+    sfx('place');
+    bus.emit('state-changed');
+    return true;
+  }
+
   private pay(gold: number, materials: { item: ItemId; qty: number }[] = []): void {
     this.gold -= gold;
     for (const m of materials) this.resources[m.item] = (this.resources[m.item] ?? 0) - m.qty;
+  }
+
+  /** Подробное сообщение о нехватке: что именно и сколько нужно. */
+  private missingText(defId: BuildingId, cost: { gold: number; materials: { item: ItemId; qty: number }[] }): string {
+    const parts: string[] = [];
+    if (this.gold < cost.gold) parts.push(`золото: нужно ещё ${cost.gold - this.gold}`);
+    for (const m of cost.materials) {
+      const have = this.resources[m.item] ?? 0;
+      if (have < m.qty) parts.push(`${(ITEMS[m.item]?.name ?? m.item).toLowerCase()}: не хватает ${m.qty - have}`);
+    }
+    return parts.length ? `Не хватает — ${parts.join(', ')}` : 'Не хватает ресурсов';
   }
 
   /* ----------------------------------------------------------- building --- */
@@ -160,7 +244,7 @@ export class Engine {
     }
     const cost = this.costOf(defId);
     if (!this.canAfford(cost.gold, cost.materials)) {
-      toast('Не хватает ресурсов', 'error');
+      toast(this.missingText(defId, cost), 'error');
       return false;
     }
     this.pay(cost.gold, cost.materials);
@@ -174,6 +258,7 @@ export class Engine {
       inputs: {},
       outputs: {},
       working: false,
+      buildProgress: 0,
     };
     this.addExisting(inst);
     this.recalcBufferBonus();
@@ -304,6 +389,14 @@ export class Engine {
   private processBuilding(b: BuildingInstance, dt: number): void {
     const def = BUILDINGS[b.defId];
     if (!def || def.recipes.length === 0) return;
+    // Стадия стройки: здание не работает, пока buildProgress не дойдёт до 1.
+    if ((b.buildProgress ?? 1) < 1) {
+      b.buildProgress = Math.min(1, (b.buildProgress ?? 0) + dt / buildTimeFor(b.defId));
+      if (b.buildProgress < 1) return;
+      b.progress = 0;
+      sfx('place');
+      bus.emit('state-changed');
+    }
     const rec = this.activeRec(b);
     if (!rec) return;
     const mul = speedMultiplier(this.upgrades, def.kind);
@@ -511,6 +604,20 @@ export class Engine {
       buildingsCount: this.buildings.length,
       beltsCount: this.belts.size,
       gridsize: [this.gridW, this.gridH],
+      buildQueue: this.buildings.map((b) => {
+        const bp = b.buildProgress ?? 1;
+        const rec = this.activeRec(b);
+        const cycle = bp < 1 ? 1 : rec ? Math.min(1, (b.progress || 0) / rec.time) : 0;
+        return {
+          id: b.id,
+          defId: b.defId,
+          name: BUILDINGS[b.defId]?.name ?? b.defId,
+          x: b.x,
+          y: b.y,
+          progress: bp < 1 ? bp * 0.985 : cycle,
+          building: bp < 1,
+        };
+      }),
     };
   }
 

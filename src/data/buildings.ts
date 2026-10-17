@@ -235,13 +235,20 @@ export function buildingsForLevel(level: number): BuildingDef[] {
   return BUILDING_LIST.filter((b) => b.unlockLevel <= level).sort((a, b) => a.unlockLevel - b.unlockLevel);
 }
 
-/** Стоимость постройки: золото растёт на 15 % за каждый уровень выше уровня открытия. */
+/** Стоимость постройки: золото растёт на 15 % за каждый уровень выше уровня открытия.
+ *  Материалы тоже берутся из текущего уровня: древесина дорожает, а с уровня 2 её
+ *  заменяют доски (их пилит лесопилка) — чтобы постройка всегда была обеспечена производством. */
 export function buildingCost(defId: BuildingId, level: number): { gold: number; materials: Ingredient[] } {
   const def = BUILDINGS[defId];
   const steps = Math.max(0, level - def.unlockLevel);
+  const usePlanks = level >= 2;
   return {
     gold: Math.round(def.cost.gold * Math.pow(1.15, steps)),
-    materials: def.cost.materials ? def.cost.materials.map((m) => ({ ...m })) : [],
+    materials: def.cost.materials
+      ? def.cost.materials.map((m) =>
+          m.item === 'wood' && usePlanks ? { item: 'plank', qty: Math.max(1, Math.ceil(m.qty / 2)) } : { ...m },
+        )
+      : [],
   };
 }
 
