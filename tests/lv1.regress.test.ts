@@ -23,7 +23,7 @@ describe('Регрессия: уровень 1 производит железн
   it('загрузка сохранения с недостроенным зданием не даёт «вечную стройку»', () => {
     const e = new Engine(getLevel(1));
     e.placeBuilding('mine_iron', 3, 3);
-    const save = e.save();
+    const save = e.serialize();
     (save.buildings[0] as any).buildProgress = 0.4; // имитируем сейв посреди стройки
     const e2 = Engine.fromSave(save);
     expect(e2.buildings[0].buildProgress).toBe(1);

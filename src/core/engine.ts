@@ -378,6 +378,33 @@ export class Engine {
     this.transferOutputs();
     this.moveBelts(dt);
     this.beltsToBuildings();
+    // Прямая связь со складом: если здание упирается в выходной буфер, а рядом
+    // только склад — предметы уходят на склад. Без этого рудник с соседним
+    // складом мгновенно останавливался («не производит ресурс»).
+    this.spillOutputsToAdjacentStorage();
+  }
+
+  /** Сброс предметов из outputs здания напрямую в соседний склад. */
+  private spillOutputsToAdjacentStorage(): void {
+    if (!(this.buildingsCountByKind('storage') > 0)) return;
+    for (const b of this.buildings) {
+      const items = Object.keys(b.outputs).filter((k) => (b.outputs[k] ?? 0) > 0);
+      for (const item of items) {
+        while ((b.outputs[item] ?? 0) > 0 && !this.hasOutputSpace(b, [{ item, qty: 1 }], this.outputCap)) {
+          let spilled = false;
+          for (const c of this.neighborCells(b)) {
+            const other = this.buildingAt(c.x, c.y);
+            if (!other || other.id === b.id) continue;
+            if (BUILDINGS[other.defId]?.kind !== 'storage') continue;
+            this.resources[item] = (this.resources[item] ?? 0) + 1;
+            b.outputs[item] = (b.outputs[item] ?? 0) - 1;
+            spilled = true;
+            break;
+          }
+          if (!spilled) break;
+        }
+      }
+    }
   }
 
   /**
