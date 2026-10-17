@@ -89,7 +89,7 @@ export class Engine {
     e.quests = save.quests;
     e.elapsed = save.elapsed;
     e.buildings = [];
-    for (const b of save.buildings) e.addExisting(b);
+    for (const b of save.buildings) e.addExisting(b, true);
     for (const t of save.belts) e.belts.set(key(t.x, t.y), t);
     e.recalcBufferBonus();
     e.completed = e.quests.length > 0 && e.quests.every((q) => q.done);
@@ -267,11 +267,11 @@ export class Engine {
     return true;
   }
 
-  private addExisting(b: BuildingInstance): void {
+  private addExisting(b: BuildingInstance, instant = false): void {
     // Совместимость со старыми сохранениями (поле buildProgress появилось позже):
-    // если здание сохранено посреди стройки, достраиваем его мгновенно,
-    // иначе оно навсегда останется «вечной стройкой» и ничего не произведёт.
-    if ((b.buildProgress ?? 1) < 1) b.buildProgress = 1;
+    // здания из сейва достраиваем мгновенно, иначе загрузка старого сейва
+    // превратила бы их в «вечную стройку» без производства.
+    if (instant && (b.buildProgress ?? 1) < 1) b.buildProgress = 1;
     this.buildings.push(b);
     const def = BUILDINGS[b.defId];
     if (!def) return;
