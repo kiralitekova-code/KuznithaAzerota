@@ -352,6 +352,8 @@ export const useGame = create<GameStore>((set, get) => ({
         e.gold += 200;
         toast('+200 золота', 'success');
         get().refresh();
+      } else if (placement === 'instant_build') {
+        toast('Все здания достроены', 'success');
       }
       set({ ad: { open: false, busy: false, placement: null, result: 'ok' } });
     } else {

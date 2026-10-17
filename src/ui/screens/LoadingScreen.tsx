@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Assets } from 'pixi.js';
+import Lottie from 'lottie-react';
 import { ALL_ASSETS, assetUrl } from '../../render/assets';
 import { useGame } from '../../store/gameStore';
 import { audio } from '../../audio/AudioManager';
+import lottieData from '../../../public/assets/lottie/loading.json';
 
 const STEPS = ['Разжигаем горн…', 'Точим клинки…', 'Заливаем расплав…', 'Готово!'];
 
@@ -68,12 +70,11 @@ export function LoadingScreen() {
 
       <div className="relative z-10 flex flex-col items-center gap-6">
         <div className="relative h-32 w-32">
-          <img
-            src={assetUrl('ui/logo.png')}
-            alt=""
-            className="pixelated absolute inset-0 m-auto h-28 w-28 animate-floaty drop-shadow-[0_0_30px_rgba(255,122,26,.55)]"
+          <Lottie
+            animationData={lottieData}
+            loop
+            className="absolute inset-0 m-auto h-32 w-32 drop-shadow-[0_0_30px_rgba(255,122,26,.55)]"
           />
-          <div className="absolute -right-2 top-2 h-10 w-3 origin-bottom animate-[cardin_1s_ease-in-out_infinite_alternate] rounded-sm bg-forge-steel shadow-[0_0_14px_rgba(255,150,60,.6)]" />
         </div>
 
         <h1 className="title text-3xl font-bold text-forge-gold glow-gold">КУЗНИЦА АЗЕРОТА</h1>
