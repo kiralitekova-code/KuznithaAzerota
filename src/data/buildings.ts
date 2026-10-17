@@ -12,6 +12,19 @@ export const BELT = {
   unlockLevel: 1,
 };
 
+/**
+ * Здания, которым для работы нужно топливо (уголь): все шахты и печи.
+ * Угольная шахта не входит — она сама добывает уголь и экономит его.
+ */
+export const FUELED_BUILDINGS: BuildingId[] = [
+  'mine_iron',
+  'mine_copper',
+  'mine_mithril',
+  'smelter_iron',
+  'smelter_copper',
+  'smelter_mithril',
+];
+
 const r = (
   id: string,
   inputs: Ingredient[],
@@ -50,7 +63,7 @@ export const BUILDINGS: Record<BuildingId, BuildingDef> = {
     nameEn: 'Coal Mine',
     cells: 2,
     kind: 'mine',
-    unlockLevel: 2,
+    unlockLevel: 1,
     cost: { gold: 90, materials: [{ item: 'wood', qty: 12 }] },
     recipes: [r('mine_coal', [], [{ item: 'coal', qty: 1 }], 2.5)],
     desc: 'Добывает уголь — топливо для шахт и печей.',

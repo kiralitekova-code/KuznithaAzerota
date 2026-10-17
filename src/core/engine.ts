@@ -1,4 +1,4 @@
-import { BELT, BUILDINGS, activeRecipe, buildingCost, questDescription } from '../data/buildings';
+import { BELT, BUILDINGS, FUELED_BUILDINGS, activeRecipe, buildingCost, questDescription } from '../data/buildings';
 import { ITEMS, itemSell } from '../data/items';
 import { getLevel } from '../data/levels';
 import { buildCostMultiplier, questAmountMultiplier, speedMultiplier } from '../data/upgrades';
@@ -392,6 +392,21 @@ export class Engine {
     return this.neighborCells(b);
   }
 
+  /** Есть ли у здания соседний склад, к которому можно прижать конвейер. */
+  private hasAdjacentStorage(b: BuildingInstance): boolean {
+    const def = BUILDINGS[b.defId];
+    if (!def) return false;
+    for (let dy = -1; dy <= def.cells; dy++)
+      for (let dx = -1; dx <= def.cells; dx++) {
+        const cx = b.x + dx;
+        const cy = b.y + dy;
+        if (!this.inside(cx, cy)) continue;
+        const o = this.buildingAt(cx, cy);
+        if (o && o.id !== b.id && BUILDINGS[o.defId]?.kind === 'storage') return true;
+      }
+    return false;
+  }
+
   /**
    * Здание отдаёт по одному предмету из своего выходного буфера соседнему
    * складу, если больше отдавать некуда (нет свободных соседних клеток под
@@ -479,16 +494,30 @@ export class Engine {
   }
 
   /** Причина простоя готового здания (для ИИ-помощника и snapshot). */
-  private stallReason(b: BuildingInstance): 'no-input' | 'no-fuel' | 'output-full' | null {
+  private stallReason(b: BuildingInstance): 'no-input' | 'no-fuel' | 'output-full' | 'no-storage' | null {
     const def = BUILDINGS[b.defId];
     if (!def || def.recipes.length === 0) return null;
     if ((b.buildProgress ?? 1) < 1) return null;
     const rec = this.activeRec(b);
     if (!rec) return null;
+    // Шахты и печи работают только при наличии склада рядом: склад — это
+    // «буфер» игры, без него здание не получает материалы и не отдаёт продукт.
+    // Угольная шахта может стартовать и без склада (её продукт — уголь со склада
+    // не нужен для запуска), но остальным топливным зданиям склад обязателен.
+    if (FUELED_BUILDINGS.includes(b.defId) && !this.hasAdjacentStorage(b)) return 'no-storage';
     if (!this.hasInputs(b, rec.inputs)) return 'no-input';
     if (def.fuel && (b.inputs[def.fuel.item] ?? 0) < def.fuel.qty) return 'no-fuel';
     if (!this.hasOutputSpace(b, rec.outputs, this.outputCap)) return 'output-full';
     return null;
+  }
+
+  /**
+   * Может ли здание работать сейчас (для процесса производства).
+   * Совпадает с stallReason === null, но без учёта no-storage там, где он
+   * уже покрыт подачей из общего запаса (pullFromStorage).
+   */
+  private canRun(b: BuildingInstance): boolean {
+    return this.stallReason(b) === null;
   }
 
   private processBuilding(b: BuildingInstance, dt: number): void {
@@ -508,6 +537,9 @@ export class Engine {
     const outCap = this.outputCap;
 
     if (!b.working) {
+      // Топливные здания (шахты и печи) работают только рядом со складом —
+      // иначе они молча простаивают («печь железа не производит слитки»).
+      if (FUELED_BUILDINGS.includes(b.defId) && !this.hasAdjacentStorage(b)) return;
       if (!this.hasInputs(b, rec.inputs)) return;
       // топливо берём из внутреннего буфера здания (пополняется со склада в pullFromStorage)
       if (def.fuel && (b.inputs[def.fuel.item] ?? 0) < def.fuel.qty) return;
