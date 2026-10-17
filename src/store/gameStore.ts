@@ -169,7 +169,7 @@ export const useGame = create<GameStore>((set, get) => ({
   tick(dt: number) {
     const e = get().engine;
     if (!e) return;
-    const boost = Date.now() < get().boostUntil ? 2 : 1;
+    const boost = Date.now() < get().boostUntil ? 4 : 1;
     e.speed = get().speed * boost;
     e.paused = get().paused || get().screen !== 'level';
     e.advance(dt);
@@ -374,9 +374,9 @@ export const useGame = create<GameStore>((set, get) => ({
         doubleFlag = true;
         set({ doubleNextQuest: true });
         toast('Следующее задание даст двойное золото', 'success');
-      } else if (placement === 'x2_speed') {
-        set({ boostUntil: Date.now() + 5 * 60 * 1000 });
-        toast('Скорость ×2 на 5 минут', 'success');
+      } else if (placement === 'x4_speed') {
+        set({ boostUntil: Date.now() + 2 * 60 * 1000 });
+        toast('Скорость ×4 на 2 минуты', 'success');
       } else if (placement === 'instant_gold' && e) {
         e.gold += 200;
         toast('+200 золота', 'success');

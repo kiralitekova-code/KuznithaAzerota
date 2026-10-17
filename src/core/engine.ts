@@ -1,4 +1,4 @@
-import { BELT, BUILDINGS, activeRecipe, buildingCost } from '../data/buildings';
+import { BELT, BUILDINGS, activeRecipe, buildingCost, questDescription } from '../data/buildings';
 import { ITEMS, itemSell } from '../data/items';
 import { getLevel } from '../data/levels';
 import { buildCostMultiplier, questAmountMultiplier, speedMultiplier } from '../data/upgrades';
@@ -72,6 +72,7 @@ export class Engine {
       item: q.item,
       amount: Math.max(1, Math.round(q.amount * amountMul)),
       progress: 0,
+      desc: questDescription(level.id, q.item),
       done: false,
       reward: q.reward.gold,
     }));
@@ -372,10 +373,60 @@ export class Engine {
   }
 
   tick(dt: number): void {
+    this.pullFromStorage();
     for (const b of this.buildings) this.processBuilding(b, dt);
     this.transferOutputs();
     this.moveBelts(dt);
     this.beltsToBuildings();
+  }
+
+  /**
+   * Умная подача: если зданию не хватает входных материалов или топлива,
+   * оно берёт недостающее прямо со склада. Раньше печь железа молча простаивала
+   * без руды в буфере — даже когда руда лежала на складе («не производит слитки»).
+   */
+  private pullFromStorage(): void {
+    if (!(this.buildingsCountByKind('storage') > 0)) return;
+    const cap = this.inputCap;
+    for (const b of this.buildings) {
+      if ((b.buildProgress ?? 1) < 1) continue;
+      const def = BUILDINGS[b.defId];
+      if (!def) continue;
+      const rec = this.activeRec(b);
+      if (!rec) continue;
+      // вход рецепта
+      for (const i of rec.inputs) {
+        const need = Math.max(0, i.qty - (b.inputs[i.item] ?? 0));
+        if (need === 0) continue;
+        const room = Math.max(0, cap - (b.inputs[i.item] ?? 0));
+        const take = Math.min(need, room, this.resources[i.item] ?? 0);
+        if (take > 0) {
+          this.resources[i.item] = (this.resources[i.item] ?? 0) - take;
+          b.inputs[i.item] = (b.inputs[i.item] ?? 0) + take;
+        }
+      }
+      // топливо (уголь и т.п.)
+      if (def.fuel) {
+        const f = def.fuel;
+        const need = Math.max(0, f.qty - (b.inputs[f.item] ?? 0));
+        if (need > 0) {
+          const room = Math.max(0, cap - (b.inputs[f.item] ?? 0));
+          const take = Math.min(need, room, this.resources[f.item] ?? 0);
+          if (take > 0) {
+            this.resources[f.item] = (this.resources[f.item] ?? 0) - take;
+            b.inputs[f.item] = (b.inputs[f.item] ?? 0) + take;
+          }
+        }
+      }
+    }
+  }
+
+  private buildingsCountByKind(kind: string): number {
+    let n = 0;
+    for (const b of this.buildings) {
+      if ((b.buildProgress ?? 1) >= 1 && BUILDINGS[b.defId]?.kind === kind) n++;
+    }
+    return n;
   }
 
   private activeRec(b: BuildingInstance) {
@@ -388,6 +439,19 @@ export class Engine {
 
   private hasOutputSpace(b: BuildingInstance, outputs: { item: ItemId; qty: number }[], cap: number): boolean {
     return outputs.every((o) => (b.outputs[o.item] ?? 0) + o.qty <= cap);
+  }
+
+  /** Причина простоя готового здания (для ИИ-помощника и snapshot). */
+  private stallReason(b: BuildingInstance): 'no-input' | 'no-fuel' | 'output-full' | null {
+    const def = BUILDINGS[b.defId];
+    if (!def || def.recipes.length === 0) return null;
+    if ((b.buildProgress ?? 1) < 1) return null;
+    const rec = this.activeRec(b);
+    if (!rec) return null;
+    if (!this.hasInputs(b, rec.inputs)) return 'no-input';
+    if (def.fuel && (b.inputs[def.fuel.item] ?? 0) < def.fuel.qty) return 'no-fuel';
+    if (!this.hasOutputSpace(b, rec.outputs, this.outputCap)) return 'output-full';
+    return null;
   }
 
   private processBuilding(b: BuildingInstance, dt: number): void {
@@ -408,11 +472,12 @@ export class Engine {
 
     if (!b.working) {
       if (!this.hasInputs(b, rec.inputs)) return;
-      if (def.fuel && (this.resources[def.fuel.item] ?? 0) < def.fuel.qty) return;
+      // топливо берём из внутреннего буфера здания (пополняется со склада в pullFromStorage)
+      if (def.fuel && (b.inputs[def.fuel.item] ?? 0) < def.fuel.qty) return;
       if (rec.mana && (this.resources.mana_energy ?? 0) < rec.mana) return;
       if (!this.hasOutputSpace(b, rec.outputs, outCap)) return;
       for (const i of rec.inputs) b.inputs[i.item] = (b.inputs[i.item] ?? 0) - i.qty;
-      if (def.fuel) this.resources[def.fuel.item] = (this.resources[def.fuel.item] ?? 0) - def.fuel.qty;
+      if (def.fuel) b.inputs[def.fuel.item] = (b.inputs[def.fuel.item] ?? 0) - def.fuel.qty;
       if (rec.mana) this.resources.mana_energy = (this.resources.mana_energy ?? 0) - rec.mana;
       b.working = true;
       b.progress = 0;
@@ -620,6 +685,8 @@ export class Engine {
           y: b.y,
           progress: bp < 1 ? bp * 0.985 : cycle,
           building: bp < 1,
+          stalled: bp >= 1 && !b.working && this.stallReason(b) !== null,
+          stallReason: bp >= 1 ? this.stallReason(b) : null,
         };
       }),
     };

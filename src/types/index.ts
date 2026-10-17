@@ -84,6 +84,8 @@ export interface QuestDef {
   item: ItemId;
   amount: number;
   reward: { gold: number };
+  /** Человекочитаемое описание задания (что и как делать). */
+  desc?: string;
 }
 
 export interface QuestState {
@@ -91,6 +93,7 @@ export interface QuestState {
   item: ItemId;
   amount: number;
   progress: number;
+  desc?: string;
   done: boolean;
   reward: number;
 }
@@ -158,6 +161,10 @@ export interface BuildInfoEntry {
   /** 0..1 — общий прогресс (стройка + готовность) */
   progress: number;
   building: boolean;
+  /** true — здание готово, но простаивает (нет руды/угля или выход переполнен) */
+  stalled?: boolean;
+  /** причина простоя для подсказок ИИ-помощника */
+  stallReason?: 'no-input' | 'no-fuel' | 'output-full' | null;
 }
 
 export interface Snapshot {

@@ -31,6 +31,9 @@ export function QuestPanel() {
                   <div className="truncate text-[11px] leading-tight text-forge-steel">
                     {ITEMS[q.item]?.name ?? q.item}
                   </div>
+                  {q.desc && (
+                    <div className="mt-0.5 text-[10px] leading-snug text-forge-steel/55">{q.desc}</div>
+                  )}
                   <div className="text-[10px] text-forge-steel/50">
                     {fmt(Math.min(q.progress, q.amount))} / {fmt(q.amount)}
                   </div>
