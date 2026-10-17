@@ -375,34 +375,46 @@ export class Engine {
   tick(dt: number): void {
     this.pullFromStorage();
     for (const b of this.buildings) this.processBuilding(b, dt);
-    this.transferOutputs();
+    // Сначала конвейеры двигаются и освобождают клетки, потом здания отдают.
     this.moveBelts(dt);
     this.beltsToBuildings();
-    // Прямая связь со складом: если здание упирается в выходной буфер, а рядом
-    // только склад — предметы уходят на склад. Без этого рудник с соседним
-    // складом мгновенно останавливался («не производит ресурс»).
-    this.spillOutputsToAdjacentStorage();
+    this.transferOutputs();
+    // Прямая связь со складом: если зданию некуда отдавать продукт (рядом нет
+    // свободных клеток под конвейер и нет соседей-получателей), оно сбрасывает
+    // его на соседний склад. Без этого рудник со стоящим вплотную складом
+    // мгновенно останавливался («не производит ресурс»), а печь железа
+    // никогда не выдавала слитки.
+    this.dumpToAdjacentStorage();
   }
 
-  /** Сброс предметов из outputs здания напрямую в соседний склад. */
-  private spillOutputsToAdjacentStorage(): void {
-    if (!(this.buildingsCountByKind('storage') > 0)) return;
+  /** Соседние клетки здания в пределах карты (свободные или с получателями). */
+  private freeNeighbors(b: BuildingInstance): { x: number; y: number }[] {
+    return this.neighborCells(b);
+  }
+
+  /**
+   * Здание отдаёт по одному предмету из своего выходного буфера соседнему
+   * складу, если больше отдавать некуда (нет свободных соседних клеток под
+   * конвейер и нет соседей-получателей). Работает и при заполненном буфере.
+   */
+  private dumpToAdjacentStorage(): void {
     for (const b of this.buildings) {
+      if ((b.buildProgress ?? 1) < 1) continue;
+      if (BUILDINGS[b.defId]?.kind === 'storage') continue;
       const items = Object.keys(b.outputs).filter((k) => (b.outputs[k] ?? 0) > 0);
-      for (const item of items) {
-        while ((b.outputs[item] ?? 0) > 0 && !this.hasOutputSpace(b, [{ item, qty: 1 }], this.outputCap)) {
-          let spilled = false;
-          for (const c of this.neighborCells(b)) {
-            const other = this.buildingAt(c.x, c.y);
-            if (!other || other.id === b.id) continue;
-            if (BUILDINGS[other.defId]?.kind !== 'storage') continue;
-            this.resources[item] = (this.resources[item] ?? 0) + 1;
-            b.outputs[item] = (b.outputs[item] ?? 0) - 1;
-            spilled = true;
-            break;
-          }
-          if (!spilled) break;
-        }
+      if (items.length === 0) continue;
+      const item = items[0];
+      // если вокруг есть свободные клетки — продукт уйдёт обычным путём
+      // (transferOutputs поставит его на конвейер или отдаст соседу)
+      if (this.freeNeighbors(b).length > 0) continue;
+      // все соседние клетки заняты зданиями: ищем среди них склад
+      for (const c of this.neighborCells(b)) {
+        const o = this.buildingAt(c.x, c.y);
+        if (!o || o.id === b.id) continue;
+        if (BUILDINGS[o.defId]?.kind !== 'storage') continue;
+        this.resources[item] = (this.resources[item] ?? 0) + 1;
+        b.outputs[item] = (b.outputs[item] ?? 0) - 1;
+        break;
       }
     }
   }
@@ -413,7 +425,6 @@ export class Engine {
    * без руды в буфере — даже когда руда лежала на складе («не производит слитки»).
    */
   private pullFromStorage(): void {
-    if (!(this.buildingsCountByKind('storage') > 0)) return;
     const cap = this.inputCap;
     for (const b of this.buildings) {
       if ((b.buildProgress ?? 1) < 1) continue;
@@ -432,28 +443,27 @@ export class Engine {
           b.inputs[i.item] = (b.inputs[i.item] ?? 0) + take;
         }
       }
-      // топливо (уголь и т.п.)
+      // топливо (уголь и т.п.): если здание уже умеет само его добывать
+      // (угольная шахта), оно экономит уголь — иначе шахта жрёт собственный
+      // ресурс и никогда не начнёт цикл. Остальные здания берут топливо из
+      // общего запаса напрямую: раньше печь железа молча простаивала без
+      // угля в буфере («не производит слитки»).
       if (def.fuel) {
         const f = def.fuel;
-        const need = Math.max(0, f.qty - (b.inputs[f.item] ?? 0));
-        if (need > 0) {
-          const room = Math.max(0, cap - (b.inputs[f.item] ?? 0));
-          const take = Math.min(need, room, this.resources[f.item] ?? 0);
-          if (take > 0) {
-            this.resources[f.item] = (this.resources[f.item] ?? 0) - take;
-            b.inputs[f.item] = (b.inputs[f.item] ?? 0) + take;
+        const makesFuel = rec.outputs.some((o) => o.item === f.item);
+        if (!makesFuel) {
+          const need = Math.max(0, f.qty - (b.inputs[f.item] ?? 0));
+          if (need > 0) {
+            const room = Math.max(0, cap - (b.inputs[f.item] ?? 0));
+            const take = Math.min(need, room, this.resources[f.item] ?? 0);
+            if (take > 0) {
+              this.resources[f.item] = (this.resources[f.item] ?? 0) - take;
+              b.inputs[f.item] = (b.inputs[f.item] ?? 0) + take;
+            }
           }
         }
       }
     }
-  }
-
-  private buildingsCountByKind(kind: string): number {
-    let n = 0;
-    for (const b of this.buildings) {
-      if ((b.buildProgress ?? 1) >= 1 && BUILDINGS[b.defId]?.kind === kind) n++;
-    }
-    return n;
   }
 
   private activeRec(b: BuildingInstance) {
