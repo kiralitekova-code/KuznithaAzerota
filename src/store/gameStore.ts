@@ -105,6 +105,7 @@ export const useGame = create<GameStore>((set, get) => ({
   beltDir: 'e',
   demolish: false,
   selectedInstance: null,
+  movingId: null,
 
   speed: 1,
   paused: false,
@@ -244,8 +245,24 @@ export const useGame = create<GameStore>((set, get) => ({
   },
 
   buildAt(x, y) {
-    const { engine, selectedBuilding, beltDir, demolish } = get();
+    const { engine, selectedBuilding, beltDir, demolish, movingId } = get();
     if (!engine) return;
+    if (movingId) {
+      // Режим перемещения: клик по клетке переносит выбранное здание (бесплатно)
+      if (engine.moveBuilding(movingId, x, y)) {
+        toast('Здание перемещено', 'success');
+      } else {
+        const why = engine.moveBlockReason(movingId, x, y);
+        const reasonText =
+          why === 'occupied' ? 'Клетка занята' :
+          why === 'limit' || why === 'not-available' ? 'Выход за пределы карты' :
+          'Сюда нельзя перенести';
+        toast(reasonText, 'error');
+      }
+      set({ movingId: null });
+      get().refresh();
+      return;
+    }
     if (demolish) {
       const before = engine.buildings.length + engine.belts.size;
       engine.removeAt(x, y);
@@ -263,6 +280,16 @@ export const useGame = create<GameStore>((set, get) => ({
       engine.placeBuilding(selectedBuilding, x, y);
     }
     get().refresh();
+  },
+
+  startMove(id) {
+    const { engine } = get();
+    if (!engine || !id) {
+      set({ movingId: null });
+      return;
+    }
+    set({ movingId: id, selectedBuilding: null, demolish: false, selectedInstance: null });
+    toast('Кликни по карте — туда переедет здание', 'info');
   },
 
   setSpeed(s) {
