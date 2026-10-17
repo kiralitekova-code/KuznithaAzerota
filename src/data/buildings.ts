@@ -1,3 +1,4 @@
+import { ITEMS } from './items';
 import type { BuildingDef, BuildingId, Ingredient, ItemId, LevelDef } from '../types';
 
 /** Метаданные конвейера (не здание в сетке зданий). */
@@ -10,6 +11,19 @@ export const BELT = {
   capacity: 4, // предметов на тайл
   unlockLevel: 1,
 };
+
+/**
+ * Здания, которым для работы нужно топливо (уголь): все шахты и печи.
+ * Угольная шахта не входит — она сама добывает уголь и экономит его.
+ */
+export const FUELED_BUILDINGS: BuildingId[] = [
+  'mine_iron',
+  'mine_copper',
+  'mine_mithril',
+  'smelter_iron',
+  'smelter_copper',
+  'smelter_mithril',
+];
 
 const r = (
   id: string,
@@ -49,7 +63,7 @@ export const BUILDINGS: Record<BuildingId, BuildingDef> = {
     nameEn: 'Coal Mine',
     cells: 2,
     kind: 'mine',
-    unlockLevel: 2,
+    unlockLevel: 1,
     cost: { gold: 90, materials: [{ item: 'wood', qty: 12 }] },
     recipes: [r('mine_coal', [], [{ item: 'coal', qty: 1 }], 2.5)],
     desc: 'Добывает уголь — топливо для шахт и печей.',
@@ -235,13 +249,58 @@ export function buildingsForLevel(level: number): BuildingDef[] {
   return BUILDING_LIST.filter((b) => b.unlockLevel <= level).sort((a, b) => a.unlockLevel - b.unlockLevel);
 }
 
-/** Стоимость постройки: золото растёт на 15 % за каждый уровень выше уровня открытия. */
+/** Стоимость постройки: золото растёт на 15 % за каждый уровень выше уровня открытия.
+ *  Материалы тоже берутся из текущего уровня: древесина дорожает, а с уровня 2 её
+ *  заменяют доски (их пилит лесопилка) — чтобы постройка всегда была обеспечена производством. */
+/** Человекочитаемое описание задания: что производим и из чего строится цепочка. */
+export function questDescription(levelId: number, item: ItemId): string {
+  const name = ITEMS[item]?.name ?? String(item);
+  switch (item) {
+    case 'ingot_iron':
+      return (
+        `Наладьте выплавку: Железный рудник добывает руду, Печь железа плавит её в слитки ` +
+        `(на каждый цикл нужен 1 уголь), а конвейеры отвозят готовое на склад.`
+      );
+    case 'ore_copper':
+      return 'Добудьте медную руду Медным рудником и довезите её конвейерами до склада.';
+    case 'ingot_copper':
+      return 'Плавьте медную руду в Печи меди — ей тоже нужен уголь каждый цикл.';
+    case 'coal':
+      return 'Постройте Угольную шахту: уголь — топливо для всех шахт и печей.';
+    case 'plank':
+      return 'Лесопилка пилит доски без топлива — доски нужны для строительства зданий.';
+    case 'blade_rough':
+      return 'Малый верстак кует черновые клинки из 2 железных слитков за цикл.';
+    case 'hilt':
+      return 'Рукоять: Малый верстак, рецепт «Рукоять» — 2 доски + 1 железный слиток.';
+    case 'leather_strap':
+      return 'Ремешок: Малый верстак, рецепт «Ремешок» — 2 кожи.';
+    case 'pommel':
+      return 'Навершие: Малый верстак, рецепт «Навершие» — 1 медный слиток.';
+    case 'gear_small':
+      return 'Шестерёнка: на Верстаке механизмов соберите шестерни из железных слитков.';
+    case 'blade_refined':
+      return 'Улучшенное лезвие: Большая кузня кует его из черновых клинков и слитков.';
+    case 'mana_energy':
+      return 'Ману производит Угольный генератор — поставьте его рядом со складом.';
+    case 'ancient_sword_t1':
+      return 'Древний меч I: Собиратель собирает его из улучшенных лезвий, рукоятей и шестерён.';
+    default:
+      return `Произведите ${name} и доставьте его конвейерами на склад.`;
+  }
+}
+
 export function buildingCost(defId: BuildingId, level: number): { gold: number; materials: Ingredient[] } {
   const def = BUILDINGS[defId];
   const steps = Math.max(0, level - def.unlockLevel);
+  const usePlanks = level >= 2;
   return {
     gold: Math.round(def.cost.gold * Math.pow(1.15, steps)),
-    materials: def.cost.materials ? def.cost.materials.map((m) => ({ ...m })) : [],
+    materials: def.cost.materials
+      ? def.cost.materials.map((m) =>
+          m.item === 'wood' && usePlanks ? { item: 'plank', qty: Math.max(1, Math.ceil(m.qty / 2)) } : { ...m },
+        )
+      : [],
   };
 }
 

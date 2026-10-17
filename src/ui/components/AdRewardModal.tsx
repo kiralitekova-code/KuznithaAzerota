@@ -6,7 +6,7 @@ import { Icon } from '../Icon';
 
 const CHOICES: { id: AdPlacement; hint: string }[] = [
   { id: 'x2_gold', hint: 'Следующее задание принесёт вдвое больше золота' },
-  { id: 'x2_speed', hint: 'Все здания работают вдвое быстрее 5 минут' },
+  { id: 'x4_speed', hint: 'Все здания работают вчетверо быстрее 2 минуты' },
   { id: 'instant_gold', hint: 'Сразу +200 золота на постройки' },
   { id: 'instant_build', hint: 'Все недостроенные здания готовы мгновенно' },
 ];
@@ -59,7 +59,7 @@ export function AdRewardModal() {
             >
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-forge-ember/15">
                 <Icon
-                  name={c.id === 'x2_speed' ? 'speed' : c.id === 'instant_build' ? 'hammer' : c.id === 'x2_gold' ? 'gold' : 'plus'}
+                  name={c.id === 'x4_speed' ? 'speed' : c.id === 'instant_build' ? 'hammer' : c.id === 'x2_gold' ? 'gold' : 'plus'}
                   size={22}
                 />
               </div>

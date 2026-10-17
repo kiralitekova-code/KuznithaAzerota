@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run typecheck && npm run vite:build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "npx tsc --noEmit",
     "vite:build": "vite build",
     "preview": "vite preview --port 4173",
     "test": "vitest run",
@@ -36,5 +36,9 @@
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
     "vitest": "^2.1.8"
+  },
+  "allowScripts": {
+    "esbuild": true,
+    "fsevents": true
   }
 }

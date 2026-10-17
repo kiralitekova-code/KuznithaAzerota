@@ -37,6 +37,7 @@ interface GameStore {
   beltDir: Dir;
   demolish: boolean;
   selectedInstance: string | null;
+  movingId: string | null;
 
   speed: number;
   paused: boolean;
@@ -63,6 +64,7 @@ interface GameStore {
   rotateBelt: () => void;
   toggleDemolish: () => void;
   selectInstance: (id: string | null) => void;
+  startMove: (id: string | null) => void;
   buildAt: (x: number, y: number) => void;
 
   setSpeed: (s: number) => void;
@@ -103,6 +105,7 @@ export const useGame = create<GameStore>((set, get) => ({
   beltDir: 'e',
   demolish: false,
   selectedInstance: null,
+  movingId: null,
 
   speed: 1,
   paused: false,
@@ -166,7 +169,7 @@ export const useGame = create<GameStore>((set, get) => ({
   tick(dt: number) {
     const e = get().engine;
     if (!e) return;
-    const boost = Date.now() < get().boostUntil ? 2 : 1;
+    const boost = Date.now() < get().boostUntil ? 4 : 1;
     e.speed = get().speed * boost;
     e.paused = get().paused || get().screen !== 'level';
     e.advance(dt);
@@ -242,8 +245,24 @@ export const useGame = create<GameStore>((set, get) => ({
   },
 
   buildAt(x, y) {
-    const { engine, selectedBuilding, beltDir, demolish } = get();
+    const { engine, selectedBuilding, beltDir, demolish, movingId } = get();
     if (!engine) return;
+    if (movingId) {
+      // Режим перемещения: клик по клетке переносит выбранное здание (бесплатно)
+      if (engine.moveBuilding(movingId, x, y)) {
+        toast('Здание перемещено', 'success');
+      } else {
+        const why = engine.moveBlockReason(movingId, x, y);
+        const reasonText =
+          why === 'occupied' ? 'Клетка занята' :
+          why === 'limit' || why === 'not-available' ? 'Выход за пределы карты' :
+          'Сюда нельзя перенести';
+        toast(reasonText, 'error');
+      }
+      set({ movingId: null });
+      get().refresh();
+      return;
+    }
     if (demolish) {
       const before = engine.buildings.length + engine.belts.size;
       engine.removeAt(x, y);
@@ -261,6 +280,16 @@ export const useGame = create<GameStore>((set, get) => ({
       engine.placeBuilding(selectedBuilding, x, y);
     }
     get().refresh();
+  },
+
+  startMove(id) {
+    const { engine } = get();
+    if (!engine || !id) {
+      set({ movingId: null });
+      return;
+    }
+    set({ movingId: id, selectedBuilding: null, demolish: false, selectedInstance: null });
+    toast('Кликни по карте — туда переедет здание', 'info');
   },
 
   setSpeed(s) {
@@ -345,9 +374,9 @@ export const useGame = create<GameStore>((set, get) => ({
         doubleFlag = true;
         set({ doubleNextQuest: true });
         toast('Следующее задание даст двойное золото', 'success');
-      } else if (placement === 'x2_speed') {
-        set({ boostUntil: Date.now() + 5 * 60 * 1000 });
-        toast('Скорость ×2 на 5 минут', 'success');
+      } else if (placement === 'x4_speed') {
+        set({ boostUntil: Date.now() + 2 * 60 * 1000 });
+        toast('Скорость ×4 на 2 минуты', 'success');
       } else if (placement === 'instant_gold' && e) {
         e.gold += 200;
         toast('+200 золота', 'success');

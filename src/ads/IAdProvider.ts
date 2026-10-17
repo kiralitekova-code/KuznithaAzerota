@@ -14,11 +14,11 @@ export interface IAdProvider {
   showInterstitial(): Promise<void>;
 }
 
-export type AdPlacement = 'x2_gold' | 'x2_speed' | 'instant_gold' | 'instant_build';
+export type AdPlacement = 'x2_gold' | 'x4_speed' | 'instant_gold' | 'instant_build';
 
 export const PLACEMENT_LABELS: Record<AdPlacement, string> = {
   x2_gold: '×2 золото за следующее задание',
-  x2_speed: '×2 скорость на 5 минут',
+  x4_speed: '×4 скорость на 2 минуты',
   instant_gold: 'Мгновенно +200 золота',
   instant_build: 'Мгновенно достроить все здания',
 };

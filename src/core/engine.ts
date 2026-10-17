@@ -1,9 +1,10 @@
-import { BELT, BUILDINGS, activeRecipe, buildingCost } from '../data/buildings';
+import { BELT, BUILDINGS, FUELED_BUILDINGS, activeRecipe, buildingCost, questDescription } from '../data/buildings';
 import { ITEMS, itemSell } from '../data/items';
 import { getLevel } from '../data/levels';
 import { buildCostMultiplier, questAmountMultiplier, speedMultiplier } from '../data/upgrades';
 import type {
   BeltTile,
+  BuildBlock,
   BuildingId,
   BuildingInstance,
   Dir,
@@ -19,6 +20,14 @@ export const MAX_BUILDINGS = 200;
 export const TICK = 0.05; // 20 Гц
 const BASE_INPUT_CAP = 10;
 const BASE_OUTPUT_CAP = 10;
+
+/** Сколько секунд строится здание (примерно половина одного производственного цикла). */
+export function buildTimeFor(defId: BuildingId): number {
+  const def = BUILDINGS[defId];
+  if (!def) return 4;
+  const t = def.recipes.length ? Math.min(...def.recipes.map((r) => r.time)) : 8;
+  return Math.max(3, Math.round(t * 0.7));
+}
 
 const key = (x: number, y: number) => `${x},${y}`;
 const DIR_VEC: Record<Dir, [number, number]> = { n: [0, -1], e: [1, 0], s: [0, 1], w: [-1, 0] };
@@ -63,6 +72,7 @@ export class Engine {
       item: q.item,
       amount: Math.max(1, Math.round(q.amount * amountMul)),
       progress: 0,
+      desc: questDescription(level.id, q.item),
       done: false,
       reward: q.reward.gold,
     }));
@@ -80,7 +90,7 @@ export class Engine {
     e.quests = save.quests;
     e.elapsed = save.elapsed;
     e.buildings = [];
-    for (const b of save.buildings) e.addExisting(b);
+    for (const b of save.buildings) e.addExisting(b, true);
     for (const t of save.belts) e.belts.set(key(t.x, t.y), t);
     e.recalcBufferBonus();
     e.completed = e.quests.length > 0 && e.quests.every((q) => q.done);
@@ -137,9 +147,84 @@ export class Engine {
     return materials.every((m) => (this.resources[m.item] ?? 0) >= m.qty);
   }
 
+  /** Клетки, которые занял бы def при установке в (x, y), включая саму площадку. */
+  footprint(defId: BuildingId, x: number, y: number, ignoreId?: string): string[] {
+    const cells = BUILDINGS[defId]?.cells ?? 1;
+    const out: string[] = [];
+    for (let dy = 0; dy < cells; dy++)
+      for (let dx = 0; dx < cells; dx++) {
+        const k = key(x + dx, y + dy);
+        const owner = this.occupied.get(k);
+        if (owner && owner !== ignoreId) out.push(k);
+      }
+    return out;
+  }
+
+  /** Точная причина, почему постройку нельзя выполнить (null — всё в порядке). */
+  blockReason(defId: BuildingId, x: number, y: number): BuildBlock {
+    if (!this.level.availableBuildings.includes(defId)) return 'not-available';
+    if (this.buildings.length >= MAX_BUILDINGS) return 'limit';
+    if (!this.cellsFree(defId, x, y)) return 'occupied';
+    const cost = this.costOf(defId);
+    if (this.gold < cost.gold) return 'no-gold';
+    if (!cost.materials.every((m) => (this.resources[m.item] ?? 0) >= m.qty)) return 'no-materials';
+    return null;
+  }
+
+  /** Причина, почему нельзя перенести здание id в (x, y). */
+  moveBlockReason(id: string, x: number, y: number): BuildBlock {
+    const b = this.buildings.find((v) => v.id === id);
+    if (!b) return 'occupied';
+    const def = BUILDINGS[b.defId];
+    if (!def) return 'occupied';
+    if (x === b.x && y === b.y) return null;
+    if (!this.inside(x, y) || !this.inside(x + def.cells - 1, y + def.cells - 1)) return 'occupied';
+    const own = new Set(this.footprint(b.defId, b.x, b.y, b.id));
+    for (let dy = 0; dy < def.cells; dy++)
+      for (let dx = 0; dx < def.cells; dx++) {
+        const cx = x + dx;
+        const cy = y + dy;
+        if (!this.inside(cx, cy)) return 'occupied';
+        const k = key(cx, cy);
+        if (own.has(k)) continue; // свои клетки не мешаем
+        if (this.occupied.has(k)) return 'occupied';
+        if (this.belts.has(k)) return 'occupied';
+      }
+    return null;
+  }
+
+  /** Перенос здания без повторной оплаты. */
+  moveBuilding(id: string, x: number, y: number): boolean {
+    const b = this.buildings.find((v) => v.id === id);
+    if (!b) return false;
+    if (this.moveBlockReason(id, x, y) !== null) return false;
+    if (x === b.x && y === b.y) return true;
+    const def = BUILDINGS[b.defId];
+    for (let dy = 0; dy < def.cells; dy++)
+      for (let dx = 0; dx < def.cells; dx++) this.occupied.delete(key(b.x + dx, b.y + dy));
+    b.x = x;
+    b.y = y;
+    for (let dy = 0; dy < def.cells; dy++)
+      for (let dx = 0; dx < def.cells; dx++) this.occupied.set(key(x + dx, y + dy), b.id);
+    sfx('place');
+    bus.emit('state-changed');
+    return true;
+  }
+
   private pay(gold: number, materials: { item: ItemId; qty: number }[] = []): void {
     this.gold -= gold;
     for (const m of materials) this.resources[m.item] = (this.resources[m.item] ?? 0) - m.qty;
+  }
+
+  /** Подробное сообщение о нехватке: что именно и сколько нужно. */
+  private missingText(defId: BuildingId, cost: { gold: number; materials: { item: ItemId; qty: number }[] }): string {
+    const parts: string[] = [];
+    if (this.gold < cost.gold) parts.push(`золото: нужно ещё ${cost.gold - this.gold}`);
+    for (const m of cost.materials) {
+      const have = this.resources[m.item] ?? 0;
+      if (have < m.qty) parts.push(`${(ITEMS[m.item]?.name ?? m.item).toLowerCase()}: не хватает ${m.qty - have}`);
+    }
+    return parts.length ? `Не хватает — ${parts.join(', ')}` : 'Не хватает ресурсов';
   }
 
   /* ----------------------------------------------------------- building --- */
@@ -160,7 +245,7 @@ export class Engine {
     }
     const cost = this.costOf(defId);
     if (!this.canAfford(cost.gold, cost.materials)) {
-      toast('Не хватает ресурсов', 'error');
+      toast(this.missingText(defId, cost), 'error');
       return false;
     }
     this.pay(cost.gold, cost.materials);
@@ -174,6 +259,7 @@ export class Engine {
       inputs: {},
       outputs: {},
       working: false,
+      buildProgress: 0,
     };
     this.addExisting(inst);
     this.recalcBufferBonus();
@@ -182,7 +268,11 @@ export class Engine {
     return true;
   }
 
-  private addExisting(b: BuildingInstance): void {
+  private addExisting(b: BuildingInstance, instant = false): void {
+    // Совместимость со старыми сохранениями (поле buildProgress появилось позже):
+    // здания из сейва достраиваем мгновенно, иначе загрузка старого сейва
+    // превратила бы их в «вечную стройку» без производства.
+    if (instant && (b.buildProgress ?? 1) < 1) b.buildProgress = 1;
     this.buildings.push(b);
     const def = BUILDINGS[b.defId];
     if (!def) return;
@@ -283,10 +373,112 @@ export class Engine {
   }
 
   tick(dt: number): void {
+    this.pullFromStorage();
     for (const b of this.buildings) this.processBuilding(b, dt);
-    this.transferOutputs();
+    // Сначала конвейеры двигаются и освобождают клетки, потом здания отдают.
     this.moveBelts(dt);
     this.beltsToBuildings();
+    this.transferOutputs();
+    // Прямая связь со складом: если зданию некуда отдавать продукт (рядом нет
+    // свободных клеток под конвейер и нет соседей-получателей), оно сбрасывает
+    // его на соседний склад. Без этого рудник со стоящим вплотную складом
+    // мгновенно останавливался («не производит ресурс»), а печь железа
+    // никогда не выдавала слитки.
+    this.dumpToAdjacentStorage();
+  }
+
+  /** Соседние клетки здания в пределах карты (свободные или с получателями). */
+  private freeNeighbors(b: BuildingInstance): { x: number; y: number }[] {
+    return this.neighborCells(b);
+  }
+
+  /** Есть ли у здания соседний склад, к которому можно прижать конвейер. */
+  private hasAdjacentStorage(b: BuildingInstance): boolean {
+    const def = BUILDINGS[b.defId];
+    if (!def) return false;
+    for (let dy = -1; dy <= def.cells; dy++)
+      for (let dx = -1; dx <= def.cells; dx++) {
+        const cx = b.x + dx;
+        const cy = b.y + dy;
+        if (!this.inside(cx, cy)) continue;
+        const o = this.buildingAt(cx, cy);
+        if (o && o.id !== b.id && BUILDINGS[o.defId]?.kind === 'storage') return true;
+      }
+    return false;
+  }
+
+  /**
+   * Здание отдаёт по одному предмету из своего выходного буфера соседнему
+   * складу, если больше отдавать некуда (нет свободных соседних клеток под
+   * конвейер и нет соседей-получателей). Работает и при заполненном буфере.
+   */
+  private dumpToAdjacentStorage(): void {
+    for (const b of this.buildings) {
+      if ((b.buildProgress ?? 1) < 1) continue;
+      if (BUILDINGS[b.defId]?.kind === 'storage') continue;
+      const items = Object.keys(b.outputs).filter((k) => (b.outputs[k] ?? 0) > 0);
+      if (items.length === 0) continue;
+      const item = items[0];
+      // если вокруг есть свободные клетки — продукт уйдёт обычным путём
+      // (transferOutputs поставит его на конвейер или отдаст соседу)
+      if (this.freeNeighbors(b).length > 0) continue;
+      // все соседние клетки заняты зданиями: ищем среди них склад
+      for (const c of this.neighborCells(b)) {
+        const o = this.buildingAt(c.x, c.y);
+        if (!o || o.id === b.id) continue;
+        if (BUILDINGS[o.defId]?.kind !== 'storage') continue;
+        this.resources[item] = (this.resources[item] ?? 0) + 1;
+        b.outputs[item] = (b.outputs[item] ?? 0) - 1;
+        break;
+      }
+    }
+  }
+
+  /**
+   * Умная подача: если зданию не хватает входных материалов или топлива,
+   * оно берёт недостающее прямо со склада. Раньше печь железа молча простаивала
+   * без руды в буфере — даже когда руда лежала на складе («не производит слитки»).
+   */
+  private pullFromStorage(): void {
+    const cap = this.inputCap;
+    for (const b of this.buildings) {
+      if ((b.buildProgress ?? 1) < 1) continue;
+      const def = BUILDINGS[b.defId];
+      if (!def) continue;
+      const rec = this.activeRec(b);
+      if (!rec) continue;
+      // вход рецепта
+      for (const i of rec.inputs) {
+        const need = Math.max(0, i.qty - (b.inputs[i.item] ?? 0));
+        if (need === 0) continue;
+        const room = Math.max(0, cap - (b.inputs[i.item] ?? 0));
+        const take = Math.min(need, room, this.resources[i.item] ?? 0);
+        if (take > 0) {
+          this.resources[i.item] = (this.resources[i.item] ?? 0) - take;
+          b.inputs[i.item] = (b.inputs[i.item] ?? 0) + take;
+        }
+      }
+      // топливо (уголь и т.п.): если здание уже умеет само его добывать
+      // (угольная шахта), оно экономит уголь — иначе шахта жрёт собственный
+      // ресурс и никогда не начнёт цикл. Остальные здания берут топливо из
+      // общего запаса напрямую: раньше печь железа молча простаивала без
+      // угля в буфере («не производит слитки»).
+      if (def.fuel) {
+        const f = def.fuel;
+        const makesFuel = rec.outputs.some((o) => o.item === f.item);
+        if (!makesFuel) {
+          const need = Math.max(0, f.qty - (b.inputs[f.item] ?? 0));
+          if (need > 0) {
+            const room = Math.max(0, cap - (b.inputs[f.item] ?? 0));
+            const take = Math.min(need, room, this.resources[f.item] ?? 0);
+            if (take > 0) {
+              this.resources[f.item] = (this.resources[f.item] ?? 0) - take;
+              b.inputs[f.item] = (b.inputs[f.item] ?? 0) + take;
+            }
+          }
+        }
+      }
+    }
   }
 
   private activeRec(b: BuildingInstance) {
@@ -301,21 +493,60 @@ export class Engine {
     return outputs.every((o) => (b.outputs[o.item] ?? 0) + o.qty <= cap);
   }
 
+  /** Причина простоя готового здания (для ИИ-помощника и snapshot). */
+  private stallReason(b: BuildingInstance): 'no-input' | 'no-fuel' | 'output-full' | 'no-storage' | null {
+    const def = BUILDINGS[b.defId];
+    if (!def || def.recipes.length === 0) return null;
+    if ((b.buildProgress ?? 1) < 1) return null;
+    const rec = this.activeRec(b);
+    if (!rec) return null;
+    // Шахты и печи работают только при наличии склада рядом: склад — это
+    // «буфер» игры, без него здание не получает материалы и не отдаёт продукт.
+    // Угольная шахта может стартовать и без склада (её продукт — уголь со склада
+    // не нужен для запуска), но остальным топливным зданиям склад обязателен.
+    if (FUELED_BUILDINGS.includes(b.defId) && !this.hasAdjacentStorage(b)) return 'no-storage';
+    if (!this.hasInputs(b, rec.inputs)) return 'no-input';
+    if (def.fuel && (b.inputs[def.fuel.item] ?? 0) < def.fuel.qty) return 'no-fuel';
+    if (!this.hasOutputSpace(b, rec.outputs, this.outputCap)) return 'output-full';
+    return null;
+  }
+
+  /**
+   * Может ли здание работать сейчас (для процесса производства).
+   * Совпадает с stallReason === null, но без учёта no-storage там, где он
+   * уже покрыт подачей из общего запаса (pullFromStorage).
+   */
+  private canRun(b: BuildingInstance): boolean {
+    return this.stallReason(b) === null;
+  }
+
   private processBuilding(b: BuildingInstance, dt: number): void {
     const def = BUILDINGS[b.defId];
     if (!def || def.recipes.length === 0) return;
+    // Стадия стройки: здание не работает, пока buildProgress не дойдёт до 1.
+    if ((b.buildProgress ?? 1) < 1) {
+      b.buildProgress = Math.min(1, (b.buildProgress ?? 0) + dt / buildTimeFor(b.defId));
+      if (b.buildProgress < 1) return;
+      b.progress = 0;
+      sfx('place');
+      bus.emit('state-changed');
+    }
     const rec = this.activeRec(b);
     if (!rec) return;
     const mul = speedMultiplier(this.upgrades, def.kind);
     const outCap = this.outputCap;
 
     if (!b.working) {
+      // Топливные здания (шахты и печи) работают только рядом со складом —
+      // иначе они молча простаивают («печь железа не производит слитки»).
+      if (FUELED_BUILDINGS.includes(b.defId) && !this.hasAdjacentStorage(b)) return;
       if (!this.hasInputs(b, rec.inputs)) return;
-      if (def.fuel && (this.resources[def.fuel.item] ?? 0) < def.fuel.qty) return;
+      // топливо берём из внутреннего буфера здания (пополняется со склада в pullFromStorage)
+      if (def.fuel && (b.inputs[def.fuel.item] ?? 0) < def.fuel.qty) return;
       if (rec.mana && (this.resources.mana_energy ?? 0) < rec.mana) return;
       if (!this.hasOutputSpace(b, rec.outputs, outCap)) return;
       for (const i of rec.inputs) b.inputs[i.item] = (b.inputs[i.item] ?? 0) - i.qty;
-      if (def.fuel) this.resources[def.fuel.item] = (this.resources[def.fuel.item] ?? 0) - def.fuel.qty;
+      if (def.fuel) b.inputs[def.fuel.item] = (b.inputs[def.fuel.item] ?? 0) - def.fuel.qty;
       if (rec.mana) this.resources.mana_energy = (this.resources.mana_energy ?? 0) - rec.mana;
       b.working = true;
       b.progress = 0;
@@ -511,6 +742,22 @@ export class Engine {
       buildingsCount: this.buildings.length,
       beltsCount: this.belts.size,
       gridsize: [this.gridW, this.gridH],
+      buildQueue: this.buildings.map((b) => {
+        const bp = b.buildProgress ?? 1;
+        const rec = this.activeRec(b);
+        const cycle = bp < 1 ? 1 : rec ? Math.min(1, (b.progress || 0) / rec.time) : 0;
+        return {
+          id: b.id,
+          defId: b.defId,
+          name: BUILDINGS[b.defId]?.name ?? b.defId,
+          x: b.x,
+          y: b.y,
+          progress: bp < 1 ? bp * 0.985 : cycle,
+          building: bp < 1,
+          stalled: bp >= 1 && !b.working && this.stallReason(b) !== null,
+          stallReason: bp >= 1 ? this.stallReason(b) : null,
+        };
+      }),
     };
   }
 

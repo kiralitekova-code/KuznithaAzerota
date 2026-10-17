@@ -7,6 +7,7 @@ import { QuestPanel } from '../components/QuestPanel';
 import { BuildingInfo } from '../components/BuildingInfo';
 import { MiniMap } from '../components/MiniMap';
 import { ShopPanel } from '../components/ShopPanel';
+import { AssistantPanel } from '../components/AssistantPanel';
 import { Icon } from '../Icon';
 import { fmtTime } from '../../utils/format';
 
@@ -72,6 +73,7 @@ export function LevelScreen() {
       <ResourceBar />
       <BuildToolbar />
       <QuestPanel />
+      <AssistantPanel />
       <BuildingInfo />
       <MiniMap />
       <ShopPanel open={shopOpen} onClose={() => setShopOpen(false)} />

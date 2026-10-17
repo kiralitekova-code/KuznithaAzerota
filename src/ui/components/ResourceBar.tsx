@@ -55,7 +55,7 @@ export function ResourceBar() {
 
         {boostLeft > 0 && (
           <div className="chip hidden shrink-0 border-sky-500/40 bg-sky-500/10 !px-2 !py-1 text-sky-200 sm:flex">
-            <Icon name="speed" size={16} /> ×2 · {fmtTime(boostLeft)}
+            <Icon name="speed" size={16} /> ×4 · {fmtTime(boostLeft)}
           </div>
         )}
 

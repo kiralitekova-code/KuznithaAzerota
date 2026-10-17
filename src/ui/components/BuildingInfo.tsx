@@ -8,6 +8,7 @@ export function BuildingInfo() {
   const engine = useGame((s) => s.engine);
   const chooseRecipe = useGame((s) => s.chooseRecipe);
   const removeInstance = useGame((s) => s.removeInstance);
+  const startMove = useGame((s) => s.startMove);
   const selectInstance = useGame((s) => s.selectInstance);
   const snap = useGame((s) => s.snap);
 
@@ -81,7 +82,14 @@ export function BuildingInfo() {
         <div className="text-[10px] text-forge-steel/40">
           буфер: {engine.inputCap} вх · {engine.outputCap} вых
         </div>
-        <button className="btn-danger ml-auto !px-2 !py-1 text-xs" onClick={() => removeInstance(b.id)}>
+        <button
+          className="btn-ghost ml-auto !px-2 !py-1 text-xs"
+          title="Перенести здание на другую клетку (бесплатно)"
+          onClick={() => startMove(b.id)}
+        >
+          Переместить
+        </button>
+        <button className="btn-danger !px-2 !py-1 text-xs" onClick={() => removeInstance(b.id)}>
           <Icon name="trash" size={14} /> Снести
         </button>
       </div>
